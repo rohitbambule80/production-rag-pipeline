@@ -1,7 +1,19 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from app.schemas import RAGQueryRequest, RAGQueryResponse
+from rag.pipeline import RAGPipeline
 
 router = APIRouter(prefix="/rag", tags=["rag"])
+
+# Production: Load from database/S3/filesystem
+DOCUMENTS = [
+    "Large Language Models hallucinate when they lack grounding in external knowledge.",
+    "Retrieval Augmented Generation (RAG) reduces hallucinations by retrieving and injecting relevant documents into LLM prompts.",
+    "Vector databases like Pinecone enable fast similarity search over text embeddings using algorithms like HNSW.",
+    "RAG pipelines typically chunk documents, embed chunks, store in vector DB, and retrieve top-k matches for queries."
+]
+
+# Initialize once at module load (singleton pattern)
+rag_pipeline = RAGPipeline(DOCUMENTS)
 
 
 @router.post("/query", response_model=RAGQueryResponse)
@@ -9,24 +21,22 @@ def query_rag(request: RAGQueryRequest):
     """
     Retrieve relevant context chunks for a RAG query using vector similarity search.
 
-    - Embeds query → searches vector store → returns top_k chunks
-    - Context ready for LLM augmentation
+    Embeds incoming query → ANN search → returns top_k most relevant chunks.
+    Context ready for downstream LLM augmentation.
     """
-    # Mock response (RAG logic wiring next step)
-    mock_context = [
-        "RAG reduces hallucinations by retrieving relevant documents from a vector store.",
-        "Documents are chunked, embedded, and stored for fast similarity search."
-    ]
-
-    response = RAGQueryResponse(
-        query=request.query,
-        context=mock_context[:request.top_k],  # Respect top_k limit
-        context_count=len(mock_context[:request.top_k]),
-        metadata={
-            "model": "toy-embedding-v1",
-            "chunk_size": 10,
-            "retriever": "cosine-similarity"
-        }
+    context_chunks = rag_pipeline.query(
+        question=request.query,
+        top_k=request.top_k
     )
 
-    return response
+    return RAGQueryResponse(
+        query=request.query,
+        context=context_chunks,
+        context_count=len(context_chunks),
+        metadata={
+            "pipeline": "production-rag-v1",
+            "retriever": "cosine-similarity",
+            "chunk_count": len(rag_pipeline.all_chunks),
+            "model": "toy-embedding-26d"
+        }
+    )
