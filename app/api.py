@@ -1,10 +1,10 @@
 from fastapi import APIRouter
 from app.schemas import RAGQueryRequest, RAGQueryResponse
 from rag.pipeline import RAGPipeline
+from rag.cache import SimpleCache
 
 router = APIRouter(prefix="/rag", tags=["rag"])
 
-# Production: Load from database/S3/filesystem
 DOCUMENTS = [
     "Large Language Models hallucinate when they lack grounding in external knowledge.",
     "Retrieval Augmented Generation (RAG) reduces hallucinations by retrieving and injecting relevant documents into LLM prompts.",
@@ -12,22 +12,38 @@ DOCUMENTS = [
     "RAG pipelines typically chunk documents, embed chunks, store in vector DB, and retrieve top-k matches for queries."
 ]
 
-# Initialize once at module load (singleton pattern)
 rag_pipeline = RAGPipeline(DOCUMENTS)
+cache = SimpleCache()
+
+
+def get_pipeline():
+    return rag_pipeline
 
 
 @router.post("/query", response_model=RAGQueryResponse)
 def query_rag(request: RAGQueryRequest):
-    """
-    Retrieve relevant context chunks for a RAG query using vector similarity search.
 
-    Embeds incoming query → ANN search → returns top_k most relevant chunks.
-    Context ready for downstream LLM augmentation.
-    """
+    # 🔹 1. Try cache first
+    cached = cache.get(request.query)
+    if cached:
+        return RAGQueryResponse(
+            query=request.query,
+            context=cached,
+            context_count=len(cached),
+            metadata={
+                "pipeline": "production-rag-v1",
+                "cache": "hit"
+            }
+        )
+
+    # 🔹 2. Run retrieval
     context_chunks = rag_pipeline.query(
         question=request.query,
         top_k=request.top_k
     )
+
+    # 🔹 3. Store in cache
+    cache.set(request.query, context_chunks)
 
     return RAGQueryResponse(
         query=request.query,
@@ -35,7 +51,7 @@ def query_rag(request: RAGQueryRequest):
         context_count=len(context_chunks),
         metadata={
             "pipeline": "production-rag-v1",
-            "retriever": "cosine-similarity",
+            "cache": "miss",
             "chunk_count": len(rag_pipeline.all_chunks),
             "model": "toy-embedding-26d"
         }
